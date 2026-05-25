@@ -31,6 +31,8 @@ TAB-separated rows on stdout:  key  κ  v  freq  (sorted by freq desc).
 """
 
 import argparse
+import os
+import random
 import sys
 from collections import defaultdict
 
@@ -89,6 +91,29 @@ def batched(iterable, n):
             buf = []
     if buf:
         yield buf
+
+
+def subsample(sentences, rate, rng):
+    """Keep each sentence with probability `rate`."""
+    for sent in sentences:
+        if rng.random() < rate:
+            yield sent
+
+
+def shard_and_sort(sentences, shard_size):
+    """Materialise sentences in shards of `shard_size`; sort each by length
+    before yielding. Length-sorting shrinks padding waste dramatically once
+    these are re-batched downstream."""
+    buf = []
+    for sent in sentences:
+        buf.append(sent)
+        if len(buf) >= shard_size:
+            buf.sort(key=len)
+            yield from buf
+            buf = []
+    if buf:
+        buf.sort(key=len)
+        yield from buf
 
 
 # ---------- accumulation ----------------------------------------------------
@@ -193,16 +218,32 @@ def parse_args():
                    help="Decimal places for κ and v in output.")
     p.add_argument("--header", action="store_true",
                    help="Print a header line.")
+    p.add_argument("--threads", type=int, default=os.cpu_count(),
+                   help="Number of CPU threads (torch.set_num_threads).")
+    p.add_argument("--sample-rate", type=float, default=1.0,
+                   help="Keep each sentence with this probability (0–1).")
+    p.add_argument("--shard-size", type=int, default=100_000,
+                   help="Sentences per length-sorted shard. 0 disables sorting "
+                        "(stream as-is).")
+    p.add_argument("--seed", type=int, default=0,
+                   help="RNG seed for subsampling.")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.threads:
+        torch.set_num_threads(args.threads)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"# device: {device}", file=sys.stderr)
-    print(f"# model:  {args.model}", file=sys.stderr)
-    print(f"# layer:  {args.layer}", file=sys.stderr)
+    print(f"# device:      {device}",                  file=sys.stderr)
+    print(f"# threads:     {torch.get_num_threads()}", file=sys.stderr)
+    print(f"# model:       {args.model}",              file=sys.stderr)
+    print(f"# layer:       {args.layer}",              file=sys.stderr)
+    print(f"# batch size:  {args.batch_size}",         file=sys.stderr)
+    print(f"# max length:  {args.max_length}",         file=sys.stderr)
+    print(f"# sample rate: {args.sample_rate}",        file=sys.stderr)
+    print(f"# shard size:  {args.shard_size}",         file=sys.stderr)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
     if not tokenizer.is_fast:
@@ -215,6 +256,11 @@ def main():
         def key_fn(surf, lem, pos): return lem
 
     sentences = parse_vertical(args.corpus, drop_punct=not args.keep_punct)
+    if args.sample_rate < 1.0:
+        rng = random.Random(args.seed)
+        sentences = subsample(sentences, args.sample_rate, rng)
+    if args.shard_size > 0:
+        sentences = shard_and_sort(sentences, args.shard_size)
     sum_vecs, freqs = accumulate(
         model, tokenizer, sentences, key_fn,
         layer=args.layer,
