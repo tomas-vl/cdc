@@ -1,10 +1,8 @@
-# Meaning frequency law through contextual diversity
-Programs to examine Zipf's meaning-frequency law through contextual diversity
-
-Implementations of the method for examining Zipf’s meaning-frequency law through contextualized word vectors (of BERT). All source codes are available under src/. The details of the methods are available in the following paper.
-
-## Citation
-Please cite the following paper if you use the above resources.  
+# Operationalizing polysemy through contextual diversity
+This repository is a fork of Nagata's [Meaning frequency law through contextual diversity](https://github.com/nagata-github/meaning_frequency_law_via_contextual_diversity).
+Nagata and Tanaka-Ishii show how polysemy can be operationalized using contextual word embeddings.
+I try to apply their method to Czech.
+Check out their paper: 
 
 ```
 @inproceedings{nagata-tanaka-ishii-2025-new,
@@ -20,6 +18,3 @@ Please cite the following paper if you use the above resources.
     pages = "15323--15335",
 }
 ```
-
-## Contact
-Ryo Nagata (nagata-acl2025 [at] ml.hyogo-u.ac.jp.).
