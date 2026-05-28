@@ -6,6 +6,75 @@ import numpy as np
 import torch
 import transformers
 
+def parse_vertical(path, drop_punct=True):
+    """Yield sentences as list[(surface, lemma, pos)]."""
+    sent, in_sent = [], False
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("<s"):
+                sent, in_sent = [], True
+                continue
+            if line.startswith("</s"):
+                if sent:
+                    yield sent
+                sent, in_sent = [], False
+                continue
+            if line.startswith("<"):           # <doc>, <text>, <p>, <block>, ...
+                continue
+            if not in_sent:
+                continue
+            cols = line.split("\t")
+            if len(cols) < 3:
+                continue
+            surface, lemma, tag = cols[0], cols[1], cols[2]
+            pos = tag[0] if tag else "X"
+            if drop_punct and pos == "Z":
+                continue
+            sent.append((surface, lemma, pos))
+    if sent:                                   # flush if file ends without </s>
+        yield sent
+
+def parse_conllu(path, drop_punct=True):
+    """Yield sentences as list[(surface, lemma, upos)] from a CoNLL-U file.
+
+    Skips comments (#...), multiword-token rows (ID with '-'), and empty nodes
+    (ID with '.'). Falls back to FORM if LEMMA is '_'.
+    Column layout: ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC.
+    """
+    sent = []
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\r\n")
+            if not line:                       # blank line = sentence boundary
+                if sent:
+                    yield sent
+                sent = []
+                continue
+            if line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) < 4:
+                continue
+            tok_id, form, lemma, upos = cols[0], cols[1], cols[2], cols[3]
+            if "-" in tok_id or "." in tok_id:   # multiword / empty node
+                continue
+            if drop_punct and upos == "PUNCT":
+                continue
+            if lemma == "_":                   # unknown lemma
+                lemma = form
+            sent.append((form, lemma, upos))
+    if sent:
+        yield sent
+
+
+def detect_format(path):
+    p = path.lower()
+    if p.endswith((".conllu", ".conll-u", ".conll")):
+        return "conllu"
+    return "vertical"
 
 def load_sentences(corpus_file, cased=False):
     """
