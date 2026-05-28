@@ -4,19 +4,11 @@
 Estimate contextual diversity  v = 1/κ  from a vertical-format corpus,
 following Nagata & Tanaka-Ishii (ACL 2025), adapted for Czech.
 
-Input
------
-Vertical (CONLL-like) file with TAB-separated columns
-    surface  lemma  morphological-tag  [...]
-Sentences are bounded by <s ...> ... </s>. Other markup (<doc>, <text>,
-<p>, <block>, ...) is ignored. Only columns 1–3 are read; any number of
-trailing columns is tolerated.
-
 Pipeline
 --------
 1. Parse vertical to sentences of (surface, lemma, POS) triples.
    POS = first character of the morphological tag (PDT positional tagset).
-2. Encode each sentence with a RoBERTa-style model using the SURFACE forms,
+2. Encode each sentence with a RoBERTa-style model usinžg the SURFACE forms,
    so the encoder sees grammatical Czech.
 3. Mean-pool subword hidden states back to word level via tokenizer.word_ids().
 4. L2-normalise each per-occurrence word vector (direction only).
@@ -30,55 +22,16 @@ Output
 TAB-separated rows on stdout:  key  κ  v  freq  (sorted by freq desc).
 """
 
+from collections import defaultdict
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
+from util import parse_conllu, parse_vertical, detect_format
 import argparse
+import numpy as np
 import os
 import random
 import sys
-from collections import defaultdict
-
-import numpy as np
 import torch
-from transformers import AutoModel, AutoTokenizer
-
-try:
-    from tqdm import tqdm
-except ImportError:                                            # pragma: no cover
-    def tqdm(x, **kw): return x
-
-
-# ---------- vertical parsing ------------------------------------------------
-
-def parse_vertical(path, drop_punct=True):
-    """Yield sentences as list[(surface, lemma, pos)]."""
-    sent, in_sent = [], False
-    with open(path, encoding="utf-8") as f:
-        for raw in f:
-            line = raw.rstrip("\n")
-            if not line:
-                continue
-            if line.startswith("<s"):
-                sent, in_sent = [], True
-                continue
-            if line.startswith("</s"):
-                if sent:
-                    yield sent
-                sent, in_sent = [], False
-                continue
-            if line.startswith("<"):           # <doc>, <text>, <p>, <block>, ...
-                continue
-            if not in_sent:
-                continue
-            cols = line.split("\t")
-            if len(cols) < 3:
-                continue
-            surface, lemma, tag = cols[0], cols[1], cols[2]
-            pos = tag[0] if tag else "X"
-            if drop_punct and pos == "Z":
-                continue
-            sent.append((surface, lemma, pos))
-    if sent:                                   # flush if file ends without </s>
-        yield sent
-
 
 # ---------- batching --------------------------------------------------------
 
@@ -200,7 +153,11 @@ def parse_args():
         description="Contextual diversity from a vertical Czech corpus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("corpus", help="Path to vertical-format corpus file.")
+    p.add_argument("corpus", help="Path to vertical-format or CoNLL-U corpus file.")
+    p.add_argument("--format", choices=("auto", "vertical", "conllu"),
+                   default="auto",
+                   help="Input format. 'auto' picks by extension "
+                        "(.conllu/.conll → conllu, else vertical).")
     p.add_argument("-m", "--model", default="ufal/robeczech-base",
                    help="HuggingFace model id.")
     p.add_argument("-b", "--batch-size", type=int, default=32)
@@ -255,7 +212,10 @@ def main():
     else:
         def key_fn(surf, lem, pos): return lem
 
-    sentences = parse_vertical(args.corpus, drop_punct=not args.keep_punct)
+    fmt = args.format if args.format != "auto" else detect_format(args.corpus)
+    print(f"# format:      {fmt}", file=sys.stderr)
+    parser = parse_conllu if fmt == "conllu" else parse_vertical
+    sentences = parser(args.corpus, drop_punct=not args.keep_punct)
     if args.sample_rate < 1.0:
         rng = random.Random(args.seed)
         sentences = subsample(sentences, args.sample_rate, rng)
@@ -276,11 +236,11 @@ def main():
           f"discarded {len(sum_vecs) - len(rows)}", file=sys.stderr)
 
     if args.header:
-        print("key\tkappa\tv\tfreq")
+        print("LEMMA/POS\tKAPPA\tV\tSAMPLE_FREQUENCY")
     for key, kappa, v, freq in rows:
         kappa_s = f"{kappa:.{args.digit}f}" if np.isfinite(kappa) else "inf"
         v_s     = f"{v:.{args.digit}f}"     if np.isfinite(v)     else "nan"
-        print(f"{key}\t{kappa_s}\t{v_s}\t{freq}")
+        print(f"{key.upper()}\t{kappa_s}\t{v_s}\t{freq}")
 
 
 if __name__ == "__main__":
